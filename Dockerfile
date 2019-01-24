@@ -1,4 +1,4 @@
-FROM node:8.9.4
+FROM node:dubnium-alpine
 
 # Update everything on the box
 RUN apt-get -y update

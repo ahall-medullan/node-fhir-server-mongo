@@ -2,18 +2,28 @@
 
 const { RESOURCES } = require('@asymmetrik/node-fhir-server-core').constants;
 const FHIRServer = require('@asymmetrik/node-fhir-server-core');
+const { COLLECTION, CLIENT_DB } = require('../../constants');
+const moment = require('moment-timezone');
+const globals = require('../../globals');
+
+const { stringQueryBuilder,
+	tokenQueryBuilder,
+	referenceQueryBuilder,
+	addressQueryBuilder,
+	nameQueryBuilder,
+	dateQueryBuilder } = require('../../utils/querybuilder.util');
 
 let getObservation = (base_version) => {
-	return require(FHIRServer.resolveFromVersion(base_version, RESOURCES.OBSERVATION));};
+	return require(FHIRServer.resolveFromVersion(base_version || '3_0_1', RESOURCES.OBSERVATION));};
 
 let getMeta = (base_version) => {
-	return require(FHIRServer.resolveFromVersion(base_version, RESOURCES.META));};
+	return require(FHIRServer.resolveFromVersion(base_version|| '3_0_1', RESOURCES.META));};
 
 module.exports.search = (args, context, logger) => new Promise((resolve, reject) => {
 	logger.info('Observation >>> search');
 
 	// Common search params
-	let { base_version, _content, _format, _id, _lastUpdated, _profile, _query, _security, _tag } = args;
+	let { base_version = '3_0_1', _content, _format, _id, _lastUpdated, _profile, _query, _security, _tag } = args;
 
 	// Search Result params
 	let { _INCLUDE, _REVINCLUDE, _SORT, _COUNT, _SUMMARY, _ELEMENTS, _CONTAINED, _CONTAINEDTYPED } = args;
@@ -46,6 +56,7 @@ module.exports.search = (args, context, logger) => new Promise((resolve, reject)
 	let identifier = args['identifier'];
 	let method = args['method'];
 	let patient = args['patient'];
+	let subject = args['subject'];
 	let performer = args['performer'];
 	let related = args['related'];
 	let related_target = args['related-target'];
@@ -59,79 +70,169 @@ module.exports.search = (args, context, logger) => new Promise((resolve, reject)
 	let value_string = args['value-string'];
 
 	// TODO: Build query from Parameters
+	let query = {};
 
-	// TODO: Query database
+	if (patient) {
+		let queryBuilder = referenceQueryBuilder(patient, 'patient.reference');
+		for (let i in queryBuilder) {
+			query[i] = queryBuilder[i];
+		}
+	}
+	if (subject) {
+		let queryBuilder = referenceQueryBuilder(subject, 'subject.reference');
+		for (let i in queryBuilder) {
+			query[i] = queryBuilder[i];
+		}
+	}
 
+	console.log('query is', query);
+
+	// Grab an instance of our DB and collection
+	let db = globals.get(CLIENT_DB);
+	let collection = db.collection(`${COLLECTION.OBSERVATION}_${base_version}`);
 	let Observation = getObservation(base_version);
 
-	// Cast all results to Observation Class
-	let observation_resource = new Observation();
-	// TODO: Set data with constructor or setter methods
-	observation_resource.id = 'test id';
+	// Query our collection for this observation
+	collection.find(query, (err, data) => {
+		if (err) {
+			logger.error('Error with Observation.search: ', err);
+			return reject(err);
+		}
 
-	// Return Array
-	resolve([observation_resource]);
+		// Patient is a patient cursor, pull documents out before resolving
+		data.toArray().then((observations) => {
+			observations.forEach(function(element, i, returnArray) {
+				returnArray[i] = new Observation(element);
+			});
+			resolve(observations);
+		});
+	});
 });
 
 module.exports.searchById = (args, context, logger) => new Promise((resolve, reject) => {
-	logger.info('Observation >>> searchById');
+	logger.info('Observation >>> searchById', args);
 
-	let { base_version, id } = args;
-
+	let { base_version = '3_0_1', id } = args;
 	let Observation = getObservation(base_version);
 
-	// TODO: Build query from Parameters
-
-	// TODO: Query database
-
-	// Cast result to Observation Class
-	let observation_resource = new Observation();
-	// TODO: Set data with constructor or setter methods
-	observation_resource.id = 'test id';
-
-	// Return resource class
-	// resolve(observation_resource);
-	resolve();
+	// Grab an instance of our DB and collection
+	let db = globals.get(CLIENT_DB);
+	let collection = db.collection(`${COLLECTION.OBSERVATION}_${base_version}`);
+	// Query our collection for this observation
+	collection.findOne({ id: id.toString() }, (err, model) => {
+		if (err) {
+			logger.error('Error with Observation.searchById: ', err);
+			return reject(err);
+		}
+		if (model) {
+			resolve(new Observation(model));
+		}
+		resolve();
+	});
 });
 
 module.exports.create = (args, context, logger) => new Promise((resolve, reject) => {
-	logger.info('Observation >>> create');
+	logger.info('Observation >>> create', args);
 
-	let { base_version, id, resource } = args;
+	let { base_version = '3_0_1', id, resource } = args;
 
+	// Grab an instance of our DB and collection
+	let db = globals.get(CLIENT_DB);
+	let collection = db.collection(`${COLLECTION.OBSERVATION}_${base_version}`);
+
+	// get current record
 	let Observation = getObservation(base_version);
+	let model = new Observation(resource);
+
 	let Meta = getMeta(base_version);
+	model.meta = new Meta({versionId: '1', lastUpdated: moment.utc().format('YYYY-MM-DDTHH:mm:ssZ')});
 
-	// TODO: determine if client/server sets ID
+	let cleaned = JSON.parse(JSON.stringify(model.toJSON()));
+	let doc = Object.assign(cleaned, { _id: id });
 
-	// Cast resource to Observation Class
-	let observation_resource = new Observation(resource);
-	observation_resource.meta = new Meta();
-	// TODO: set meta info
+	// Insert/update our observation record
+	collection.insertOne({ id: id }, { $set: doc }, { upsert: true }, (err2, res) => {
+		if (err2) {
+			logger.error('Error with Observation.create: ', err2);
+			return reject(err2);
+		}
 
-	// TODO: save record to database
+		// save to history
+		let history_collection = db.collection(`${COLLECTION.OBSERVATION}_${base_version}_History`);
 
+		let history_model = Object.assign(cleaned, { _id: id + cleaned.meta.versionId });
+
+		// Insert our observation record to history but don't assign _id
+		return history_collection.insertOne(history_model, (err3) => {
+			if (err3) {
+				logger.error('Error with ObservationHistory.create: ', err3);
+				return reject(err3);
+			}
+
+			return resolve({ id: res.value && res.value.id, created: res.lastErrorObject && !res.lastErrorObject.updatedExisting, resource_version: doc.meta.versionId });
+		});
+
+	});
 	// Return Id
-	resolve({ id: observation_resource.id });
 });
 
 module.exports.update = (args, context, logger) => new Promise((resolve, reject) => {
-	logger.info('Observation >>> update');
+	logger.info('Observation >>> update', args);
 
-	let { base_version, id, resource } = args;
+	let { base_version = '3_0_1', id, resource } = args;
 
-	let Observation = getObservation(base_version);
-	let Meta = getMeta(base_version);
+	// Grab an instance of our DB and collection
+	let db = globals.get(CLIENT_DB);
+	let collection = db.collection(`${COLLECTION.OBSERVATION}_${base_version}`);
 
-	// Cast resource to Observation Class
-	let observation_resource = new Observation(resource);
-	observation_resource.meta = new Meta();
-	// TODO: set meta info, increment meta ID
+	// get current record
+	// Query our collection for this observation
+	collection.findOne({ id: id.toString() }, (err, data) => {
+		if (err) {
+			logger.error('Error with Observation.searchById: ', err);
+			return reject(err);
+		}
 
-	// TODO: save record to database
+		let Observation = getObservation(base_version);
+		let model = new Observation(resource);
 
-	// Return id, if recorded was created or updated, new meta version id
-	resolve({ id: observation_resource.id, created: false, resource_version: observation_resource.meta.versionId });
+		if (data && data.meta) {
+			let foundModel = new Observation(data);
+			let meta = foundModel.meta;
+			meta.versionId = `${parseInt(foundModel.meta.versionId) + 1}`;
+			model.meta = meta;
+		} else {
+			let Meta = getMeta(base_version);
+			model.meta = new Meta({versionId: '1', lastUpdated: moment.utc().format('YYYY-MM-DDTHH:mm:ssZ')});
+		}
+
+		let cleaned = JSON.parse(JSON.stringify(model));
+		let doc = Object.assign(cleaned, { _id: id });
+
+		// Insert/update our model record
+		collection.findOneAndUpdate({ id: id }, { $set: doc }, { upsert: true }, (err2, res) => {
+			if (err2) {
+				logger.error('Error with Observation.update: ', err2);
+				return reject(err2);
+			}
+
+			// save to history
+			let history_collection = db.collection(`${COLLECTION.OBSERVATION}_${base_version}_History`);
+
+			let history_model = Object.assign(cleaned, { _id: id + cleaned.meta.versionId });
+
+			// Insert our model record to history but don't assign _id
+			return history_collection.insertOne(history_model, (err3) => {
+				if (err3) {
+					logger.error('Error with ObservationHistory.create: ', err3);
+					return reject(err3);
+				}
+
+				return resolve({ id: doc.id, created: res.lastErrorObject && !res.lastErrorObject.updatedExisting, resource_version: doc.meta.versionId });
+			});
+
+		});
+	});
 });
 
 module.exports.remove = (args, context, logger) => new Promise((resolve, reject) => {
@@ -148,7 +249,7 @@ module.exports.remove = (args, context, logger) => new Promise((resolve, reject)
 module.exports.searchByVersionId = (args, context, logger) => new Promise((resolve, reject) => {
 	logger.info('Observation >>> searchByVersionId');
 
-	let { base_version, id, version_id } = args;
+	let { base_version = '3_0_1', id, version_id } = args;
 
 	let Observation = getObservation(base_version);
 
@@ -167,7 +268,7 @@ module.exports.history = (args, context, logger) => new Promise((resolve, reject
 	logger.info('Observation >>> history');
 
 	// Common search params
-	let { base_version, _content, _format, _id, _lastUpdated, _profile, _query, _security, _tag } = args;
+	let { base_version = '3_0_1', _content, _format, _id, _lastUpdated, _profile, _query, _security, _tag } = args;
 
 	// Search Result params
 	let { _INCLUDE, _REVINCLUDE, _SORT, _COUNT, _SUMMARY, _ELEMENTS, _CONTAINED, _CONTAINEDTYPED } = args;
@@ -229,7 +330,7 @@ module.exports.historyById = (args, context, logger) => new Promise((resolve, re
 	logger.info('Observation >>> historyById');
 
 	// Common search params
-	let { base_version, _content, _format, _id, _lastUpdated, _profile, _query, _security, _tag } = args;
+	let { base_version = '3_0_1', _content, _format, _id, _lastUpdated, _profile, _query, _security, _tag } = args;
 
 	// Search Result params
 	let { _INCLUDE, _REVINCLUDE, _SORT, _COUNT, _SUMMARY, _ELEMENTS, _CONTAINED, _CONTAINEDTYPED } = args;

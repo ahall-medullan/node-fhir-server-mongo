@@ -1,6 +1,7 @@
 const { VERSIONS, RESOURCES } = require('@asymmetrik/node-fhir-server-core').constants;
 const env = require('var');
 
+console.log(env);
 
 /**
  * @name mongoConfig
@@ -13,7 +14,6 @@ let mongoConfig = {
 		auto_reconnect: true
 	}
 };
-
 
 
 // Set up whitelist
@@ -40,7 +40,7 @@ let fhirServerConfig = {
 		// strategy: {
 		// 	name: 'bearer',
 		// 	useSession: false,
-		// 	service: './src/strategies/bearer.strategy.js'
+		// 	service: './src/strategies/google-info.strategy.js'
 		// },
 	},
 	server: {
@@ -62,11 +62,11 @@ let fhirServerConfig = {
 	security: [
 		{
 			url: 'authorize',
-			valueUri: `${env.AUTH_SERVER_URI}/authorize`
+			valueUri: env.AUTH_SERVER_TOKEN_URL ? env.AUTH_SERVER_TOKEN_URL : `${env.AUTH_SERVER_URI}/authorize`
 		},
 		{
 			url: 'token',
-			valueUri: `${env.AUTH_SERVER_URI}/token`
+			valueUri: env.AUTH_SERVER_AUTHORIZE_URL ? env.AUTH_SERVER_AUTHORIZE_URL : `${env.AUTH_SERVER_URI}/token`
 		}
 		// optional - registration
 	],
@@ -390,10 +390,10 @@ let fhirServerConfig = {
 		// 	service: './src/services/nutritionorder/nutritionorder.service.js',
 		// 	versions: [ VERSIONS['3_0_1'] ]
 		// },
-		// [RESOURCES.OBSERVATION]: {
-		// 	service: './src/services/observation/observation.service.js',
-		// 	versions: [ VERSIONS['3_0_1'] ]
-		// },
+		[RESOURCES.OBSERVATION]: {
+			service: './src/services/observation/observation.service.js',
+			versions: [ VERSIONS['3_0_1'] ]
+		},
 		// [RESOURCES.OPERATIONDEFINITION]: {
 		// 	service: './src/services/operationdefinition/operationdefinition.service.js',
 		// 	versions: [ VERSIONS['3_0_1'] ]
@@ -442,14 +442,14 @@ let fhirServerConfig = {
 		// 	service: './src/services/provenance/provenance.service.js',
 		// 	versions: [ VERSIONS['3_0_1'] ]
 		// },
-		// [RESOURCES.QUESTIONNAIRE]: {
-		// 	service: './src/services/questionnaire/questionnaire.service.js',
-		// 	versions: [ VERSIONS['3_0_1'] ]
-		// },
-		// [RESOURCES.QUESTIONNAIRERESPONSE]: {
-		// 	service: './src/services/questionnaireresponse/questionnaireresponse.service.js',
-		// 	versions: [ VERSIONS['3_0_1'] ]
-		// },
+		[RESOURCES.QUESTIONNAIRE]: {
+			service: './src/services/questionnaire/questionnaire.service.js',
+			versions: [ VERSIONS['3_0_1'] ]
+		},
+		[RESOURCES.QUESTIONNAIRERESPONSE]: {
+			service: './src/services/questionnaireresponse/questionnaireresponse.service.js',
+			versions: [ VERSIONS['3_0_1'] ]
+		},
 		// [RESOURCES.REFERRALREQUEST]: {
 		// 	service: './src/services/referralrequest/referralrequest.service.js',
 		// 	versions: [ VERSIONS['3_0_1'] ]
